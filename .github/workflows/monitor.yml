@@ -1,0 +1,55 @@
+name: BTC cloud price monitor
+on:
+  schedule:
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'monitor = monitor once; test = send test email; check = check prices'
+        default: monitor
+        type: choice
+        options: [monitor, test, check]
+permissions:
+  contents: write
+concurrency:
+  group: btc-price-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check prices and send queued alerts
+        env:
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          RUN_MODE: ${{ inputs.mode || 'monitor' }}
+        shell: bash
+        run: |
+          case "$RUN_MODE" in
+            test) python monitor.py --test-email ;;
+            check) python monitor.py --check ;;
+            monitor) python monitor.py ;;
+            *) exit 1 ;;
+          esac
+      - name: Persist alert state even if email failed
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -f state.json ]; then
+            git config user.name 'btc-monitor[bot]'
+            git config user.email 'btc-monitor@users.noreply.github.com'
+            git add state.json
+            if ! git diff --cached --quiet; then
+              git commit -m 'Save BTC alert state [skip ci]'
+              git push
+            fi
+          fi
